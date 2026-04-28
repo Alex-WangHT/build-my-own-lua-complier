@@ -1,96 +1,247 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Token 模块单元测试
+Token 模块单元测试 - 支持自动化注册测试用例
 
 该模块支持以下测试方式：
-1. 运行所有测试
-2. 按 Token 类型测试（如只测试 NUMBER、STRING 等）
-3. 按特定测试用例测试
+1. 使用装饰器 @test_case 自动注册普通测试用例
+2. 使用装饰器 @token_type_test(type) 自动注册按类型分类的测试用例
+3. 按函数名前缀 test_ 自动发现测试用例
+4. 手动注册（向后兼容）
 
 使用方法:
-    python -m pytest test/test_token.py -v
-    python test/test_token.py
-    python test/test_token.py --token-type NUMBER
-    python test/test_token.py --test-case "Token基本创建"
+    python test/test_token.py                    # 运行所有测试
+    python test/test_token.py --token-type NUMBER  # 只测试 NUMBER 类型
+    python test/test_token.py --list-types         # 列出所有 Token 类型
 """
 
 import sys
 import os
 import argparse
+import inspect
+from typing import Dict, List, Tuple, Callable, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'src'))
 
 from token import TokenType, Token, LexerRule
 
 
-def get_general_test_cases() -> list:
+# ============================================================================
+# 测试用例装饰器系统 - 自动化注册
+# ============================================================================
+
+# 存储自动注册的测试用例
+_general_tests: List[Tuple[str, Callable]] = []
+_token_type_tests: Dict[str, List[Tuple[str, Callable]]] = {}
+
+
+def test_case(name: Optional[str] = None):
+    """
+    测试用例装饰器 - 自动注册普通测试用例
+
+    使用示例:
+        @test_case("测试名称")
+        def test_something():
+            assert True
+
+        @test_case()  # 自动使用函数名作为测试名称
+        def test_another():
+            assert True
+
+    Args:
+        name (str, optional): 测试用例名称，如果不提供则使用函数名
+    """
+    def decorator(func: Callable) -> Callable:
+        # 确定测试名称
+        test_name = name if name else func.__name__
+        
+        # 自动注册到通用测试列表
+        _general_tests.append((test_name, func))
+        
+        return func
+    
+    # 处理两种使用方式：@test_case 和 @test_case("name")
+    if callable(name):
+        # 直接装饰：@test_case
+        func = name
+        return decorator(func)
+    else:
+        # 带参数：@test_case("name")
+        return decorator
+
+
+def token_type_test(token_type: str, name: Optional[str] = None):
+    """
+    Token 类型测试装饰器 - 自动注册按类型分类的测试用例
+
+    使用示例:
+        @token_type_test("NUMBER", "整数解析")
+        def test_number_int():
+            assert True
+
+        @token_type_test("NUMBER")  # 自动使用函数名作为测试名称
+        def test_number_float():
+            assert True
+
+    Args:
+        token_type (str): Token 类型名称（如 "NUMBER", "STRING" 等）
+        name (str, optional): 测试用例名称，如果不提供则使用函数名
+    """
+    def decorator(func: Callable) -> Callable:
+        # 确定测试名称
+        test_name = name if name else func.__name__
+        
+        # 自动注册到对应 Token 类型的测试列表
+        if token_type not in _token_type_tests:
+            _token_type_tests[token_type] = []
+        _token_type_tests[token_type].append((test_name, func))
+        
+        return func
+    
+    return decorator
+
+
+def auto_discover_tests(module_name: str = __name__):
+    """
+    自动发现测试用例 - 按函数名前缀 test_ 发现
+
+    该函数会扫描当前模块，找到所有以 test_ 开头的函数，
+    并尝试根据函数名自动分类：
+    - test_number_xxx → NUMBER 类型
+    - test_string_xxx → STRING 类型
+    - test_xxx → 通用测试
+
+    Args:
+        module_name (str): 模块名称，默认为当前模块
+    """
+    import sys
+    
+    module = sys.modules.get(module_name)
+    if not module:
+        return
+    
+    # 遍历模块中的所有成员
+    for name, obj in inspect.getmembers(module):
+        # 只处理函数，且以 test_ 开头
+        if inspect.isfunction(obj) and name.startswith("test_"):
+            # 检查是否已经被装饰器注册过（通过检查函数属性）
+            if hasattr(obj, '_registered'):
+                continue
+            
+            # 尝试根据函数名自动分类
+            parts = name.split("_")
+            if len(parts) >= 2:
+                # 检查是否是 Token 类型测试
+                # 格式：test_{TYPE}_{name} 或 test_{TYPE}
+                possible_type = parts[1].upper()
+                
+                # 检查是否是有效的 Token 类型
+                valid_types = ['NUMBER', 'STRING', 'IDENTIFIER', 'BOOLEAN', 
+                              'NIL', 'EOF', 'KEYWORD', 'OPERATOR', 'LOCAL',
+                              'FUNCTION', 'IF', 'ELSE', 'WHILE', 'FOR']
+                
+                if possible_type in valid_types:
+                    # 提取测试名称
+                    if len(parts) >= 3:
+                        test_name = " ".join(parts[2:]).replace("_", " ").title()
+                    else:
+                        test_name = name.replace("_", " ").title()
+                    
+                    # 注册到对应类型
+                    if possible_type not in _token_type_tests:
+                        _token_type_tests[possible_type] = []
+                    _token_type_tests[possible_type].append((test_name, obj))
+                    continue
+            
+            # 默认注册为通用测试
+            test_name = name.replace("_", " ").title()
+            _general_tests.append((test_name, obj))
+
+
+# ============================================================================
+# 测试用例获取函数 - 支持自动发现和手动注册
+# ============================================================================
+
+def get_general_test_cases() -> List[Tuple[str, Callable]]:
     """
     获取通用测试用例列表
-    格式: (测试名称, 测试函数)
+
+    优先返回装饰器注册的测试用例，如果没有则尝试自动发现。
+
+    Returns:
+        List[Tuple[str, Callable]]: 测试用例列表，格式为 [(测试名称, 测试函数), ...]
     """
-    return [
-        ("TokenType枚举完整性", test_token_type_enum),
-        ("TokenType值唯一性", test_token_type_unique),
-        ("TokenType比较", test_token_type_comparison),
-        ("LexerRule创建", test_lexer_rule_creation),
-    ]
+    # 如果没有装饰器注册的测试用例，尝试自动发现
+    if not _general_tests:
+        auto_discover_tests()
+    
+    return _general_tests.copy()
 
 
-def get_token_type_test_cases() -> dict:
+def get_token_type_test_cases() -> Dict[str, List[Tuple[str, Callable]]]:
     """
     获取按 Token 类型分类的测试用例
-    格式: {Token类型名称: [(测试名称, 测试函数), ...]}
+
+    优先返回装饰器注册的测试用例，如果没有则尝试自动发现。
+
+    Returns:
+        Dict[str, List[Tuple[str, Callable]]]: 按类型分类的测试用例字典
     """
-    return {
-        'NUMBER': [
-            ("NUMBER类型Token创建", test_number_token_creation),
-            ("NUMBER类型值验证", test_number_token_value),
-        ],
-        'STRING': [
-            ("STRING类型Token创建", test_string_token_creation),
-            ("STRING类型值验证", test_string_token_value),
-        ],
-        'IDENTIFIER': [
-            ("IDENTIFIER类型Token创建", test_identifier_token_creation),
-        ],
-        'BOOLEAN': [
-            ("BOOLEAN类型Token创建", test_boolean_token_creation),
-            ("BOOLEAN类型True值验证", test_boolean_true_value),
-            ("BOOLEAN类型False值验证", test_boolean_false_value),
-        ],
-        'NIL': [
-            ("NIL类型Token创建", test_nil_token_creation),
-            ("NIL类型值验证", test_nil_token_value),
-        ],
-        'EOF': [
-            ("EOF类型Token创建", test_eof_token_creation),
-        ],
-        'KEYWORD': [
-            ("LOCAL类型Token创建", test_local_token_creation),
-            ("FUNCTION类型Token创建", test_function_token_creation),
-            ("IF类型Token创建", test_if_token_creation),
-        ],
-        'OPERATOR': [
-            ("OP_PLUS类型Token创建", test_op_plus_token),
-            ("OP_MINUS类型Token创建", test_op_minus_token),
-            ("OP_MULT类型Token创建", test_op_mult_token),
-            ("OP_DIV类型Token创建", test_op_div_token),
-            ("OP_EQ类型Token创建", test_op_eq_token),
-            ("OP_NE类型Token创建", test_op_ne_token),
-        ],
-    }
+    # 如果没有装饰器注册的测试用例，尝试自动发现
+    if not _token_type_tests:
+        auto_discover_tests()
+    
+    return {k: v.copy() for k, v in _token_type_tests.items()}
 
 
-def get_all_token_types() -> list:
-    """获取所有支持的 Token 类型名称"""
-    return list(get_token_type_test_cases().keys())
+def get_all_token_types() -> List[str]:
+    """
+    获取所有支持的 Token 类型名称
+
+    Returns:
+        List[str]: Token 类型名称列表
+    """
+    # 确保测试用例已加载
+    if not _token_type_tests:
+        get_token_type_test_cases()
+    
+    return list(_token_type_tests.keys())
+
+
+def add_general_test(name: str, func: Callable):
+    """
+    手动添加通用测试用例（向后兼容）
+
+    Args:
+        name (str): 测试用例名称
+        func (Callable): 测试函数
+    """
+    _general_tests.append((name, func))
+
+
+def add_token_type_test(token_type: str, name: str, func: Callable):
+    """
+    手动添加 Token 类型测试用例（向后兼容）
+
+    Args:
+        token_type (str): Token 类型名称
+        name (str): 测试用例名称
+        func (Callable): 测试函数
+    """
+    if token_type not in _token_type_tests:
+        _token_type_tests[token_type] = []
+    _token_type_tests[token_type].append((name, func))
 
 
 # ============================================================================
-# 通用测试函数
+# 测试用例 - 使用装饰器自动注册
 # ============================================================================
 
+# ------------------------------
+# 通用测试用例
+# ------------------------------
+
+@test_case("TokenType枚举完整性")
 def test_token_type_enum() -> bool:
     """测试 TokenType 枚举是否包含必要的类型"""
     required = ['EOF', 'NUMBER', 'STRING', 'IDENTIFIER', 'BOOLEAN', 'NIL',
@@ -103,6 +254,7 @@ def test_token_type_enum() -> bool:
     return True
 
 
+@test_case("TokenType值唯一性")
 def test_token_type_unique() -> bool:
     """测试 TokenType 值是否唯一"""
     try:
@@ -115,6 +267,7 @@ def test_token_type_unique() -> bool:
         return False
 
 
+@test_case("TokenType比较")
 def test_token_type_comparison() -> bool:
     """测试 TokenType 比较"""
     try:
@@ -130,6 +283,7 @@ def test_token_type_comparison() -> bool:
         return False
 
 
+@test_case("LexerRule创建")
 def test_lexer_rule_creation() -> bool:
     """测试 LexerRule 创建"""
     try:
@@ -152,10 +306,11 @@ def test_lexer_rule_creation() -> bool:
         return False
 
 
-# ============================================================================
-# Token 类型测试函数
-# ============================================================================
+# ------------------------------
+# NUMBER 类型测试用例
+# ------------------------------
 
+@token_type_test("NUMBER", "NUMBER类型Token创建")
 def test_number_token_creation() -> bool:
     """测试 NUMBER 类型 Token 创建"""
     try:
@@ -168,6 +323,7 @@ def test_number_token_creation() -> bool:
         return False
 
 
+@token_type_test("NUMBER", "NUMBER类型值验证")
 def test_number_token_value() -> bool:
     """测试 NUMBER 类型 Token 值验证"""
     try:
@@ -187,6 +343,11 @@ def test_number_token_value() -> bool:
         return False
 
 
+# ------------------------------
+# STRING 类型测试用例
+# ------------------------------
+
+@token_type_test("STRING", "STRING类型Token创建")
 def test_string_token_creation() -> bool:
     """测试 STRING 类型 Token 创建"""
     try:
@@ -199,6 +360,7 @@ def test_string_token_creation() -> bool:
         return False
 
 
+@token_type_test("STRING", "STRING类型值验证")
 def test_string_token_value() -> bool:
     """测试 STRING 类型 Token 值验证"""
     try:
@@ -218,6 +380,11 @@ def test_string_token_value() -> bool:
         return False
 
 
+# ------------------------------
+# IDENTIFIER 类型测试用例
+# ------------------------------
+
+@token_type_test("IDENTIFIER", "IDENTIFIER类型Token创建")
 def test_identifier_token_creation() -> bool:
     """测试 IDENTIFIER 类型 Token 创建"""
     try:
@@ -231,6 +398,11 @@ def test_identifier_token_creation() -> bool:
         return False
 
 
+# ------------------------------
+# BOOLEAN 类型测试用例
+# ------------------------------
+
+@token_type_test("BOOLEAN", "BOOLEAN类型Token创建")
 def test_boolean_token_creation() -> bool:
     """测试 BOOLEAN 类型 Token 创建"""
     try:
@@ -247,6 +419,7 @@ def test_boolean_token_creation() -> bool:
         return False
 
 
+@token_type_test("BOOLEAN", "BOOLEAN类型True值验证")
 def test_boolean_true_value() -> bool:
     """测试 BOOLEAN 类型 True 值验证"""
     try:
@@ -260,6 +433,7 @@ def test_boolean_true_value() -> bool:
         return False
 
 
+@token_type_test("BOOLEAN", "BOOLEAN类型False值验证")
 def test_boolean_false_value() -> bool:
     """测试 BOOLEAN 类型 False 值验证"""
     try:
@@ -273,6 +447,11 @@ def test_boolean_false_value() -> bool:
         return False
 
 
+# ------------------------------
+# NIL 类型测试用例
+# ------------------------------
+
+@token_type_test("NIL", "NIL类型Token创建")
 def test_nil_token_creation() -> bool:
     """测试 NIL 类型 Token 创建"""
     try:
@@ -285,6 +464,7 @@ def test_nil_token_creation() -> bool:
         return False
 
 
+@token_type_test("NIL", "NIL类型值验证")
 def test_nil_token_value() -> bool:
     """测试 NIL 类型 Token 值验证"""
     try:
@@ -298,6 +478,11 @@ def test_nil_token_value() -> bool:
         return False
 
 
+# ------------------------------
+# EOF 类型测试用例
+# ------------------------------
+
+@token_type_test("EOF", "EOF类型Token创建")
 def test_eof_token_creation() -> bool:
     """测试 EOF 类型 Token 创建"""
     try:
@@ -311,6 +496,11 @@ def test_eof_token_creation() -> bool:
         return False
 
 
+# ------------------------------
+# KEYWORD 类型测试用例
+# ------------------------------
+
+@token_type_test("KEYWORD", "LOCAL类型Token创建")
 def test_local_token_creation() -> bool:
     """测试 LOCAL 类型 Token 创建"""
     try:
@@ -324,6 +514,7 @@ def test_local_token_creation() -> bool:
         return False
 
 
+@token_type_test("KEYWORD", "FUNCTION类型Token创建")
 def test_function_token_creation() -> bool:
     """测试 FUNCTION 类型 Token 创建"""
     try:
@@ -336,6 +527,7 @@ def test_function_token_creation() -> bool:
         return False
 
 
+@token_type_test("KEYWORD", "IF类型Token创建")
 def test_if_token_creation() -> bool:
     """测试 IF 类型 Token 创建"""
     try:
@@ -348,6 +540,11 @@ def test_if_token_creation() -> bool:
         return False
 
 
+# ------------------------------
+# OPERATOR 类型测试用例
+# ------------------------------
+
+@token_type_test("OPERATOR", "OP_PLUS类型Token")
 def test_op_plus_token() -> bool:
     """测试 OP_PLUS 类型 Token"""
     try:
@@ -361,6 +558,7 @@ def test_op_plus_token() -> bool:
         return False
 
 
+@token_type_test("OPERATOR", "OP_MINUS类型Token")
 def test_op_minus_token() -> bool:
     """测试 OP_MINUS 类型 Token"""
     try:
@@ -373,6 +571,7 @@ def test_op_minus_token() -> bool:
         return False
 
 
+@token_type_test("OPERATOR", "OP_MULT类型Token")
 def test_op_mult_token() -> bool:
     """测试 OP_MULT 类型 Token"""
     try:
@@ -385,6 +584,7 @@ def test_op_mult_token() -> bool:
         return False
 
 
+@token_type_test("OPERATOR", "OP_DIV类型Token")
 def test_op_div_token() -> bool:
     """测试 OP_DIV 类型 Token"""
     try:
@@ -397,6 +597,7 @@ def test_op_div_token() -> bool:
         return False
 
 
+@token_type_test("OPERATOR", "OP_EQ类型Token")
 def test_op_eq_token() -> bool:
     """测试 OP_EQ 类型 Token"""
     try:
@@ -409,6 +610,7 @@ def test_op_eq_token() -> bool:
         return False
 
 
+@token_type_test("OPERATOR", "OP_NE类型Token")
 def test_op_ne_token() -> bool:
     """测试 OP_NE 类型 Token"""
     try:
@@ -425,12 +627,12 @@ def test_op_ne_token() -> bool:
 # 测试运行函数
 # ============================================================================
 
-def run_general_tests() -> tuple:
+def run_general_tests() -> Tuple[int, int, List[Tuple[str, bool]]]:
     """
     运行通用测试
 
     Returns:
-        tuple: (通过数, 失败数, 结果列表)
+        Tuple[int, int, List[Tuple[str, bool]]]: (通过数, 失败数, 结果列表)
     """
     test_cases = get_general_test_cases()
     passed = 0
@@ -458,7 +660,7 @@ def run_general_tests() -> tuple:
     return passed, failed, results
 
 
-def run_token_type_tests(token_type: str = None) -> tuple:
+def run_token_type_tests(token_type: Optional[str] = None) -> Tuple[int, int, List[Tuple[str, bool]]]:
     """
     运行指定 Token 类型的测试
 
@@ -466,7 +668,7 @@ def run_token_type_tests(token_type: str = None) -> tuple:
         token_type (str, optional): Token 类型名称，如果为 None 则运行所有类型
 
     Returns:
-        tuple: (通过数, 失败数, 结果列表)
+        Tuple[int, int, List[Tuple[str, bool]]]: (通过数, 失败数, 结果列表)
     """
     type_test_cases = get_token_type_test_cases()
     
@@ -512,7 +714,7 @@ def run_token_type_tests(token_type: str = None) -> tuple:
     return passed, failed, results
 
 
-def run_tests(token_type: str = None, test_case: str = None) -> tuple:
+def run_tests(token_type: Optional[str] = None, test_case: Optional[str] = None) -> Tuple[int, int, List[Tuple[str, bool]]]:
     """
     运行测试
 
@@ -521,13 +723,14 @@ def run_tests(token_type: str = None, test_case: str = None) -> tuple:
         test_case (str, optional): 只运行指定名称的测试用例
 
     Returns:
-        tuple: (通过数, 失败数, 结果列表)
+        Tuple[int, int, List[Tuple[str, bool]]]: (通过数, 失败数, 结果列表)
     """
     if test_case:
         print("=" * 60)
         print(f"Token 模块 - 特定测试用例: {test_case}")
         print("=" * 60)
         
+        # 构建所有测试用例的查找表
         all_test_cases = {}
         
         for name, func in get_general_test_cases():
@@ -573,14 +776,39 @@ def run_tests(token_type: str = None, test_case: str = None) -> tuple:
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(
-        description='Token 模块单元测试',
+        description='Token 模块单元测试 - 支持自动化注册',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
-示例:
-  python test/test_token.py                    # 运行所有测试
-  python test/test_token.py --token-type NUMBER  # 只测试 NUMBER 类型
-  python test/test_token.py --token-type STRING  # 只测试 STRING 类型
-  python test/test_token.py --test-case "Token基本创建"  # 运行指定测试用例
+使用示例:
+  # 运行所有测试
+  python test/test_token.py
+  
+  # 只测试指定 Token 类型
+  python test/test_token.py --token-type NUMBER
+  python test/test_token.py --token-type STRING
+  
+  # 只运行指定测试用例
+  python test/test_token.py --test-case "TokenType枚举完整性"
+  
+  # 列出所有支持的 Token 类型
+  python test/test_token.py --list-types
+
+测试用例注册方式:
+  1. 使用装饰器自动注册（推荐）:
+     @test_case("测试名称")
+     def test_something():
+         pass
+     
+     @token_type_test("NUMBER", "测试名称")
+     def test_number():
+         pass
+  
+  2. 按函数名自动发现:
+     def test_token_type_xxx():  # 自动注册为通用测试
+         pass
+     
+     def test_number_xxx():  # 自动注册到 NUMBER 类型
+         pass
 
 支持的 Token 类型:
   {', '.join(get_all_token_types())}
