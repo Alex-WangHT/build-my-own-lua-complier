@@ -7,7 +7,6 @@ Token 模块 - 定义 Token 类型和 Token 类
 使用方法:
     python src/token.py              # 运行单元测试
     python src/token.py -t           # 运行测试
-    python src/token.py -c "test"    # 测试特定功能
 """
 
 import sys
