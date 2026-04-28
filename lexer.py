@@ -17,8 +17,9 @@ Lua Lexer - 可扩展的词法分析器
 import argparse
 import sys
 import os
+import re
 from enum import Enum, auto
-from typing import Any, Optional, List, Callable
+from typing import Any, Optional, List, Callable, Tuple, Union
 
 
 class TokenType(Enum):
@@ -234,9 +235,13 @@ class Lexer:
         ))
         
         # 字符串规则 - 双引号
+        # 使用 "unrolling the loop" 技术避免灾难性回溯
+        # 模式解释：匹配 " 开头，然后是 [^"\\]* (非引号非反斜杠)
+        # 可选地重复 (\\.[^"\\]*)* (转义字符后跟非引号非反斜杠)
+        # 最后以 " 结尾
         self.add_rule(LexerRule(
             name='string_double',
-            pattern=r'"([^"\\]|\\.)*"',
+            pattern=r'"[^"\\]*(\\.[^"\\]*)*"',
             handler=self._handle_string,
             priority=9
         ))
@@ -244,7 +249,7 @@ class Lexer:
         # 字符串规则 - 单引号
         self.add_rule(LexerRule(
             name='string_single',
-            pattern=r"'([^'\\]|\\.)*'",
+            pattern=r"'[^'\\]*(\\.[^'\\]*)*'",
             handler=self._handle_string,
             priority=9
         ))
@@ -497,7 +502,7 @@ class Lexer:
         """处理换行符 - 只更新状态，不生成Token"""
         return None
     
-    def _try_match_rule(self, rule: LexerRule) -> Optional[Token]:
+    def _try_match_rule(self, rule: LexerRule) -> Tuple[Optional[Token], bool]:
         """
         尝试匹配指定规则
         
@@ -505,9 +510,12 @@ class Lexer:
             rule: 词法规则
         
         Returns:
-            匹配的Token或None
+            (token, advanced) 元组:
+            - token: 匹配的Token（如果有），否则为None
+            - advanced: 布尔值，表示位置是否前进了（即使匹配被跳过）
         """
-        import re
+        # 保存当前位置，用于判断是否前进了
+        original_pos = self.pos
         
         # 从当前位置开始匹配
         remaining = self.source[self.pos:]
@@ -544,28 +552,21 @@ class Lexer:
             else:
                 token = None
             
-            if token is not None:
-                # 更新位置
-                self.pos = new_pos
-                self.line = new_line
-                self.column = new_column
-                if self.pos < len(self.source):
-                    self.current_char = self.source[self.pos]
-                else:
-                    self.current_char = None
-                return token
+            # 更新位置（无论是否返回Token）
+            self.pos = new_pos
+            self.line = new_line
+            self.column = new_column
+            if self.pos < len(self.source):
+                self.current_char = self.source[self.pos]
             else:
-                # 处理器返回None，表示跳过
-                self.pos = new_pos
-                self.line = new_line
-                self.column = new_column
-                if self.pos < len(self.source):
-                    self.current_char = self.source[self.pos]
-                else:
-                    self.current_char = None
-                return None
+                self.current_char = None
+            
+            # 返回Token和是否前进的标志
+            advanced = (self.pos != original_pos)
+            return (token, advanced)
         
-        return None
+        # 没有匹配
+        return (None, False)
     
     def get_next_token(self) -> Token:
         """
@@ -576,19 +577,22 @@ class Lexer:
         """
         # 尝试匹配所有规则
         while self.current_char is not None:
-            matched = False
+            advanced_any = False
             
             for rule in self.rules:
-                token = self._try_match_rule(rule)
+                token, advanced = self._try_match_rule(rule)
+                
                 if token is not None:
+                    # 匹配成功，返回Token
                     return token
-                elif token is None and self.pos > 0:
-                    # 规则匹配并跳过了一些字符
-                    matched = True
+                
+                if advanced:
+                    # 匹配成功但跳过了（如注释、空白），标记并跳出规则循环
+                    advanced_any = True
                     break
             
-            if not matched:
-                # 没有匹配到任何规则，返回UNKNOWN token
+            if not advanced_any:
+                # 没有任何规则匹配，返回UNKNOWN token
                 token = Token(
                     TokenType.UNKNOWN, 
                     self.current_char, 
