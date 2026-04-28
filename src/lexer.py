@@ -3,21 +3,13 @@
 """
 Lexer 模块 - Lua 词法分析器
 用于将 Lua 源代码转换为 Token 流
-
-使用方法:
-    python src/lexer.py              # 运行测试
-    python src/lexer.py -t           # 运行测试
-    python src/lexer.py -c "code"    # 分析代码
-    python src/lexer.py -i           # 交互式模式
 """
 
 import sys
 import os
 import re
-import argparse
 from typing import Any, Optional, List, Tuple
 
-# 添加 src 目录到路径，方便导入
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from token import TokenType, Token, LexerRule
@@ -335,137 +327,3 @@ class Lexer:
             self._init_source(source)
         else:
             self._init_source(self.source)
-
-
-def get_test_cases() -> list:
-    """
-    获取测试用例 - 方便扩展
-    格式: (测试名称, 源代码, 预期Token类型列表)
-    """
-    return [
-        ("变量定义", "local x = 10", [TokenType.LOCAL, TokenType.IDENTIFIER, TokenType.ASSIGN, TokenType.NUMBER]),
-        ("字符串", 'local s = "hello"', [TokenType.LOCAL, TokenType.IDENTIFIER, TokenType.ASSIGN, TokenType.STRING]),
-        ("布尔值", "local flag = true", [TokenType.LOCAL, TokenType.IDENTIFIER, TokenType.ASSIGN, TokenType.BOOLEAN]),
-        ("nil值", "local n = nil", [TokenType.LOCAL, TokenType.IDENTIFIER, TokenType.ASSIGN, TokenType.NIL]),
-        ("运算符", "a + b * c", [TokenType.IDENTIFIER, TokenType.OP_PLUS, TokenType.IDENTIFIER, TokenType.OP_MULT, TokenType.IDENTIFIER]),
-        ("比较运算符", "x == y", [TokenType.IDENTIFIER, TokenType.OP_EQ, TokenType.IDENTIFIER]),
-        ("函数定义", "function add() end", [TokenType.FUNCTION, TokenType.IDENTIFIER, TokenType.LPAREN, TokenType.RPAREN, TokenType.END]),
-    ]
-
-
-def analyze_code(lexer: Lexer, source: str, show_details: bool = True) -> list:
-    """分析代码并返回Token列表"""
-    tokens = lexer.tokenize(source)
-    
-    if show_details:
-        print(f"\n输入: {repr(source)}")
-        print(f"Token数: {len(tokens)}")
-        for i, token in enumerate(tokens):
-            print(f"  {i+1:2d}. {token}")
-    
-    return tokens
-
-
-def run_tests() -> int:
-    """运行所有测试"""
-    print("=" * 60)
-    print("Lexer 模块单元测试")
-    print("=" * 60)
-    
-    lexer = Lexer()
-    test_cases = get_test_cases()
-    passed = 0
-    failed = 0
-    
-    for name, source, expected_types in test_cases:
-        print(f"\n测试: {name}")
-        try:
-            tokens = lexer.tokenize(source)
-            actual_types = [t.type for t in tokens if t.type != TokenType.EOF]
-            
-            if actual_types == expected_types:
-                print(f"  ✓ 通过 ({len(tokens)} 个Token)")
-                passed += 1
-            else:
-                print(f"  ✗ 失败")
-                print(f"    预期: {[t.name for t in expected_types]}")
-                print(f"    实际: {[t.name for t in actual_types]}")
-                failed += 1
-                
-        except Exception as e:
-            print(f"  ✗ 异常: {e}")
-            failed += 1
-    
-    print(f"\n{'='*60}")
-    print(f"结果: 通过 {passed}, 失败 {failed}, 总计 {len(test_cases)}")
-    print(f"{'='*60}")
-    
-    return 0 if failed == 0 else 1
-
-
-def interactive_mode():
-    """交互式模式"""
-    print("=" * 60)
-    print("Lua Lexer 交互式模式")
-    print("=" * 60)
-    print("输入代码进行分析，输入 'quit' 退出")
-    
-    lexer = Lexer()
-    
-    while True:
-        try:
-            user_input = input("\n>>> ").strip()
-            
-            if not user_input:
-                continue
-            
-            if user_input.lower() in ('quit', 'exit', 'q'):
-                print("再见!")
-                break
-            
-            analyze_code(lexer, user_input)
-            
-        except KeyboardInterrupt:
-            print("\n再见!")
-            break
-        except EOFError:
-            print("\n再见!")
-            break
-
-
-def main():
-    """CLI入口点"""
-    parser = argparse.ArgumentParser(
-        description='Lua Lexer - 词法分析器',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-示例:
-  python src/lexer.py              # 运行测试
-  python src/lexer.py -t           # 运行测试
-  python src/lexer.py -i           # 交互式模式
-  python src/lexer.py -c "local x = 10"  # 分析代码
-        """
-    )
-    
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument('-t', '--test', action='store_true', help='运行单元测试')
-    mode_group.add_argument('-i', '--interactive', action='store_true', help='交互式模式')
-    mode_group.add_argument('-c', '--code', type=str, metavar='CODE', help='分析代码')
-    
-    parser.add_argument('--version', action='version', version='Lua Lexer v1.0')
-    
-    args = parser.parse_args()
-    
-    if args.interactive:
-        interactive_mode()
-        return 0
-    elif args.code:
-        lexer = Lexer()
-        analyze_code(lexer, args.code)
-        return 0
-    else:
-        return run_tests()
-
-
-if __name__ == "__main__":
-    sys.exit(main())
