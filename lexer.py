@@ -3,8 +3,20 @@
 """
 Lua Lexer - 可扩展的词法分析器
 用于解析Lua的变量和数据类型
+
+使用方法:
+    python lexer.py              # 进入交互式模式
+    python lexer.py -i           # 进入交互式模式
+    python lexer.py -t           # 运行预定义测试用例
+    python lexer.py -f file.lua  # 分析文件
+    python lexer.py -c "code"    # 分析命令行代码
+    python lexer.py -r           # 查看已定义的规则
+    python lexer.py -h           # 显示帮助信息
 """
 
+import argparse
+import sys
+import os
 from enum import Enum, auto
 from typing import Any, Optional, List, Callable
 
@@ -625,55 +637,56 @@ class Lexer:
             self._init_source(self.source)
 
 
-def main():
+def get_test_cases() -> List[tuple]:
     """
-    单元测试主函数
-    输入解析的语句，输出解析的结果
-    """
-    print("=" * 60)
-    print("Lua Lexer 单元测试")
-    print("=" * 60)
+    获取预定义的测试用例
+    方便扩展 - 添加新测试用例只需在此函数中添加
     
-    # 测试用例
+    Returns:
+        测试用例列表，每个元素为 (源代码, 描述)
+    """
     test_cases = [
-        # 测试1: 变量定义
-        ("local x = 10", "变量定义"),
+        # 基础变量定义
+        ("local x = 10", "变量定义 - 整数"),
+        ("local pi = 3.14159", "变量定义 - 浮点数"),
+        ("local hex_num = 0xFF", "变量定义 - 十六进制"),
+        ("local sci_num = 1e-5", "变量定义 - 科学计数法"),
         
-        # 测试2: 数字类型
-        ("local num = 3.14159", "浮点数"),
-        ("local hex = 0xFF", "十六进制"),
-        ("local sci = 1e-5", "科学计数法"),
+        # 字符串类型
+        ('local str = "Hello World"', "字符串 - 双引号"),
+        ("local str = 'Lua is fun'", "字符串 - 单引号"),
+        ('local escape = "Line1\\nLine2\\tTabbed"', "字符串 - 转义字符"),
         
-        # 测试3: 字符串类型
-        ('local str = "Hello World"', "双引号字符串"),
-        ("local str = 'Lua is fun'", "单引号字符串"),
-        ('local escape = "Line1\\nLine2\\tTabbed"', "转义字符串"),
-        
-        # 测试4: 布尔值和nil
-        ("local flag = true", "布尔值true"),
-        ("local flag = false", "布尔值false"),
+        # 布尔值和nil
+        ("local is_active = true", "布尔值 - true"),
+        ("local is_valid = false", "布尔值 - false"),
         ("local nothing = nil", "nil值"),
         
-        # 测试5: 运算符
-        ("local sum = a + b * c - d / e", "算术运算符"),
-        ("local cmp = x == y or x ~= z", "比较运算符"),
-        ("local concat = 'Hello' .. ' ' .. 'World'", "连接运算符"),
+        # 运算符
+        ("local result = a + b * c - d / e % f ^ g", "运算符 - 算术"),
+        ("local cmp = x == y or x ~= z and x < y", "运算符 - 比较和逻辑"),
+        ("local concat = 'Hello' .. ' ' .. 'World'", "运算符 - 字符串连接"),
         
-        # 测试6: 表定义
-        ("local tbl = {1, 2, 3, key = 'value'}", "表构造"),
+        # 表构造
+        ("local arr = {1, 2, 3, 4, 5}", "表 - 数组形式"),
+        ("local dict = {name = 'Lua', version = 5.4}", "表 - 字典形式"),
+        ("local mixed = {1, 2, key = 'value', 3}", "表 - 混合形式"),
         
-        # 测试7: 函数定义
-        ("local function add(a, b) return a + b end", "函数定义"),
+        # 函数定义
+        ("local function add(a, b) return a + b end", "函数 - 简单定义"),
+        ("function greet(name) print('Hello, ' .. name) end", "函数 - 全局函数"),
         
-        # 测试8: 控制流
-        ("if x > 0 then print('positive') else print('negative') end", "条件语句"),
+        # 控制流
+        ("if x > 0 then print('positive') else print('negative') end", "控制流 - if-else"),
+        ("while i < 10 do i = i + 1 end", "控制流 - while循环"),
+        ("for i = 1, 10 do print(i) end", "控制流 - for循环"),
         
-        # 测试9: 注释
-        ("-- 这是一行注释\nlocal x = 1", "单行注释"),
+        # 注释
+        ("-- 这是一行注释\nlocal x = 1", "注释 - 单行"),
         
-        # 测试10: 综合测试
+        # 综合测试
         ("""
--- 综合测试
+-- 综合测试：计算函数
 local function calculate(a, b)
     local sum = a + b
     local product = a * b
@@ -687,63 +700,395 @@ end
 
 local data = calculate(10, 5)
 print("Sum:", data.sum)
-        """, "综合测试"),
+print("Product:", data.product)
+        """, "综合测试 - 完整函数"),
     ]
     
-    # 执行测试
-    lexer = Lexer()
-    all_passed = True
-    failed_count = 0
+    return test_cases
+
+
+def print_tokens(tokens: List[Token], show_details: bool = True):
+    """
+    格式化打印Token列表
+    
+    Args:
+        tokens: Token列表
+        show_details: 是否显示详细信息
+    """
+    if not tokens:
+        print("  (无Token)")
+        return
+    
+    # 统计信息
+    token_counts = {}
+    for token in tokens:
+        token_type = token.type.name
+        token_counts[token_type] = token_counts.get(token_type, 0) + 1
+    
+    # 打印详细信息
+    if show_details:
+        print(f"\n  {'='*70}")
+        print(f"  {'#':<4} {'位置':<12} {'类型':<20} {'值':<30}")
+        print(f"  {'='*70}")
+        
+        for i, token in enumerate(tokens, 1):
+            value_str = repr(token.value) if token.value is not None else "None"
+            # 截断过长的值
+            if len(value_str) > 28:
+                value_str = value_str[:25] + "..."
+            print(f"  {i:<4} [{token.line}:{token.column:<6}] {token.type.name:<20} {value_str:<30}")
+        
+        print(f"  {'='*70}")
+    
+    # 打印统计信息
+    print(f"\n  统计信息:")
+    print(f"  总Token数: {len(tokens)}")
+    print(f"  类型分布:")
+    for token_type, count in sorted(token_counts.items()):
+        print(f"    {token_type:<20}: {count}")
+
+
+def analyze_code(lexer: Lexer, source: str, description: str = "输入代码"):
+    """
+    分析一段Lua代码
+    
+    Args:
+        lexer: 词法分析器实例
+        source: Lua源代码
+        description: 代码描述
+    """
+    print(f"\n{'='*70}")
+    print(f"分析: {description}")
+    print(f"{'='*70}")
+    print(f"\n输入代码:")
+    # 显示带行号的代码
+    lines = source.split('\n')
+    for i, line in enumerate(lines, 1):
+        print(f"  {i:3d} | {line}")
+    
+    try:
+        tokens = lexer.tokenize(source)
+        print_tokens(tokens)
+        
+        # 验证
+        has_eof = any(t.type == TokenType.EOF for t in tokens)
+        has_unknown = any(t.type == TokenType.UNKNOWN for t in tokens)
+        
+        if has_unknown:
+            print(f"\n  ⚠ 警告: 存在未知Token!")
+            unknown_tokens = [t for t in tokens if t.type == TokenType.UNKNOWN]
+            for t in unknown_tokens:
+                print(f"    位置 [{t.line}:{t.column}]: {repr(t.value)}")
+        
+        if has_eof:
+            print(f"\n  ✓ 分析完成，共 {len(tokens)} 个Token")
+            return True
+        else:
+            print(f"\n  ✗ 分析失败: 缺少EOF Token")
+            return False
+            
+    except Exception as e:
+        print(f"\n  ✗ 分析异常: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def run_tests(lexer: Lexer):
+    """
+    运行预定义的测试用例
+    
+    Args:
+        lexer: 词法分析器实例
+    """
+    test_cases = get_test_cases()
+    
+    print("=" * 70)
+    print("Lua Lexer 单元测试")
+    print(f"测试用例数: {len(test_cases)}")
+    print("=" * 70)
+    
     passed_count = 0
+    failed_count = 0
+    failed_tests = []
     
     for i, (source, description) in enumerate(test_cases, 1):
-        print(f"\n{'='*60}")
-        print(f"测试 {i}: {description}")
-        print(f"输入: {repr(source)}")
-        print(f"{'-'*60}")
+        print(f"\n{'='*70}")
+        print(f"测试 {i}/{len(test_cases)}: {description}")
+        print(f"{'='*70}")
         
         try:
             tokens = lexer.tokenize(source)
             
-            print("Token列表:")
-            for j, token in enumerate(tokens):
-                print(f"  {j+1:2d}. {token}")
-            
-            # 简单验证：确保有EOF token
+            # 验证
             has_eof = any(t.type == TokenType.EOF for t in tokens)
-            if has_eof:
-                print(f"\n✓ 测试 {i} 通过")
+            has_unknown = any(t.type == TokenType.UNKNOWN for t in tokens)
+            
+            if has_eof and not has_unknown:
+                print(f"  ✓ 通过 ({len(tokens)} 个Token)")
                 passed_count += 1
             else:
-                print(f"\n✗ 测试 {i} 失败: 缺少EOF token")
+                print(f"  ✗ 失败")
+                if not has_eof:
+                    print(f"    原因: 缺少EOF Token")
+                if has_unknown:
+                    print(f"    原因: 存在未知Token")
                 failed_count += 1
-                all_passed = False
+                failed_tests.append((i, description))
                 
         except Exception as e:
-            print(f"\n✗ 测试 {i} 失败: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"  ✗ 异常: {e}")
             failed_count += 1
-            all_passed = False
+            failed_tests.append((i, description))
     
     # 统计结果
-    print(f"\n{'='*60}")
+    print(f"\n{'='*70}")
     print("测试结果统计")
-    print(f"{'='*60}")
-    print(f"总测试数: {len(test_cases)}")
-    print(f"通过: {passed_count}")
-    print(f"失败: {failed_count}")
-    print(f"{'='*60}")
+    print(f"{'='*70}")
+    print(f"  总测试数: {len(test_cases)}")
+    print(f"  通过: {passed_count}")
+    print(f"  失败: {failed_count}")
+    print(f"  成功率: {passed_count/len(test_cases)*100:.1f}%")
+    print(f"{'='*70}")
     
-    if all_passed:
-        print("\n🎉 所有测试通过!")
-        return 0
+    if failed_tests:
+        print(f"\n失败的测试:")
+        for i, desc in failed_tests:
+            print(f"  {i}. {desc}")
+        return 1
     else:
-        print(f"\n❌ 有 {failed_count} 个测试失败")
+        print(f"\n🎉 所有测试通过!")
+        return 0
+
+
+def interactive_mode(lexer: Lexer):
+    """
+    交互式模式 - 实时输入Lua代码进行词法分析
+    
+    Args:
+        lexer: 词法分析器实例
+    """
+    print("=" * 70)
+    print("Lua Lexer 交互式模式")
+    print("=" * 70)
+    print("\n使用说明:")
+    print("  - 直接输入Lua代码，按Enter进行词法分析")
+    print("  - 输入多行代码: 先输入 '{'，然后输入代码，最后输入 '}'")
+    print("  - 特殊命令:")
+    print("    help 或 ?    显示帮助信息")
+    print("    rules        显示已定义的词法规则")
+    print("    tokens       显示所有Token类型")
+    print("    test         运行单元测试")
+    print("    clear 或 cls 清空屏幕")
+    print("    quit 或 exit 退出交互式模式")
+    print(f"\n{'='*70}")
+    
+    while True:
+        try:
+            # 读取输入
+            user_input = input("\n>>> ").strip()
+            
+            # 处理空输入
+            if not user_input:
+                continue
+            
+            # 处理特殊命令
+            if user_input.lower() in ('quit', 'exit', 'q'):
+                print("再见!")
+                break
+            
+            elif user_input.lower() in ('help', '?'):
+                print("\n帮助信息:")
+                print("  输入Lua代码进行词法分析")
+                print("  输入 '{' 开始多行输入模式，输入 '}' 结束")
+                print("  特殊命令: help, rules, tokens, test, clear, quit")
+            
+            elif user_input.lower() in ('rules', 'r'):
+                print(f"\n已定义的词法规则 ({len(lexer.rules)} 个):")
+                print(f"{'='*70}")
+                print(f"{'优先级':<8} {'名称':<20} {'模式':<40}")
+                print(f"{'='*70}")
+                for rule in lexer.rules:
+                    pattern = rule.pattern[:37] + "..." if len(rule.pattern) > 40 else rule.pattern
+                    print(f"{rule.priority:<8} {rule.name:<20} {pattern:<40}")
+                print(f"{'='*70}")
+            
+            elif user_input.lower() in ('tokens', 't'):
+                print(f"\n所有Token类型 ({len(TokenType)} 个):")
+                print(f"{'='*70}")
+                for i, token_type in enumerate(TokenType, 1):
+                    print(f"  {i:3d}. {token_type.name}")
+                print(f"{'='*70}")
+            
+            elif user_input.lower() == 'test':
+                run_tests(lexer)
+            
+            elif user_input.lower() in ('clear', 'cls'):
+                # 清空屏幕（跨平台）
+                os.system('cls' if os.name == 'nt' else 'clear')
+                print("=" * 70)
+                print("Lua Lexer 交互式模式")
+                print("=" * 70)
+            
+            elif user_input == '{':
+                # 多行输入模式
+                print("多行输入模式 (输入 '}' 结束):")
+                lines = []
+                while True:
+                    line = input("... ")
+                    if line.strip() == '}':
+                        break
+                    lines.append(line)
+                
+                source = '\n'.join(lines)
+                if source.strip():
+                    analyze_code(lexer, source, "多行输入")
+            
+            else:
+                # 普通代码分析
+                analyze_code(lexer, user_input, "单行输入")
+                
+        except KeyboardInterrupt:
+            print("\n\n已中断 (按 Ctrl+D 或输入 'quit' 退出)")
+        except EOFError:
+            print("\n再见!")
+            break
+        except Exception as e:
+            print(f"\n错误: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    return 0
+
+
+def analyze_file(lexer: Lexer, file_path: str):
+    """
+    分析文件中的Lua代码
+    
+    Args:
+        lexer: 词法分析器实例
+        file_path: 文件路径
+    """
+    print(f"=" * 70)
+    print(f"文件分析: {file_path}")
+    print(f"=" * 70)
+    
+    if not os.path.exists(file_path):
+        print(f"错误: 文件不存在: {file_path}")
+        return 1
+    
+    if not os.path.isfile(file_path):
+        print(f"错误: 不是文件: {file_path}")
+        return 1
+    
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            source = f.read()
+        
+        return 0 if analyze_code(lexer, source, f"文件: {file_path}") else 1
+        
+    except Exception as e:
+        print(f"错误: 读取文件失败 - {e}")
         return 1
 
 
+def main():
+    """
+    主函数 - CLI入口点
+    支持多种模式：交互式、测试、文件分析、命令行代码分析
+    """
+    parser = argparse.ArgumentParser(
+        description='Lua Lexer - 可扩展的Lua词法分析器',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+示例用法:
+  python lexer.py              # 进入交互式模式
+  python lexer.py -i           # 进入交互式模式
+  python lexer.py -t           # 运行单元测试
+  python lexer.py -c "local x = 10"  # 分析命令行代码
+  python lexer.py -f test.lua  # 分析文件
+  python lexer.py -r           # 查看已定义的规则
+        """
+    )
+    
+    # 模式选择（互斥）
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
+        '-i', '--interactive',
+        action='store_true',
+        help='进入交互式模式（默认）'
+    )
+    mode_group.add_argument(
+        '-t', '--test',
+        action='store_true',
+        help='运行预定义的单元测试'
+    )
+    mode_group.add_argument(
+        '-f', '--file',
+        type=str,
+        metavar='FILE',
+        help='分析指定的Lua文件'
+    )
+    mode_group.add_argument(
+        '-c', '--code',
+        type=str,
+        metavar='CODE',
+        help='分析命令行提供的Lua代码'
+    )
+    mode_group.add_argument(
+        '-r', '--rules',
+        action='store_true',
+        help='显示已定义的词法规则'
+    )
+    
+    # 其他选项
+    parser.add_argument(
+        '-v', '--verbose',
+        action='store_true',
+        help='显示详细输出'
+    )
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='Lua Lexer v1.0'
+    )
+    
+    # 解析参数
+    args = parser.parse_args()
+    
+    # 创建词法分析器实例
+    lexer = Lexer()
+    
+    # 根据模式执行
+    if args.test:
+        # 测试模式
+        sys.exit(run_tests(lexer))
+    
+    elif args.file:
+        # 文件模式
+        sys.exit(analyze_file(lexer, args.file))
+    
+    elif args.code:
+        # 命令行代码模式
+        success = analyze_code(lexer, args.code, "命令行输入")
+        sys.exit(0 if success else 1)
+    
+    elif args.rules:
+        # 显示规则
+        print(f"\n已定义的词法规则 ({len(lexer.rules)} 个):")
+        print(f"{'='*80}")
+        print(f"{'优先级':<8} {'名称':<20} {'模式':<50}")
+        print(f"{'='*80}")
+        for rule in lexer.rules:
+            pattern = rule.pattern[:47] + "..." if len(rule.pattern) > 50 else rule.pattern
+            print(f"{rule.priority:<8} {rule.name:<20} {pattern:<50}")
+        print(f"{'='*80}")
+        sys.exit(0)
+    
+    else:
+        # 默认：交互式模式
+        sys.exit(interactive_mode(lexer))
+
+
 if __name__ == "__main__":
-    exit_code = main()
-    import sys
-    sys.exit(exit_code)
+    main()
